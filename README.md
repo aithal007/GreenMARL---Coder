@@ -1,4 +1,16 @@
-﻿# GreenMARL-Coder
+﻿---
+title: GreenMARL-Coder
+emoji: 🤖
+colorFrom: indigo
+colorTo: blue
+sdk: gradio
+sdk_version: "4.36.0"
+python_version: "3.10"
+app_file: app.py
+pinned: false
+---
+
+# GreenMARL-Coder
 
 GreenMARL-Coder is a hackathon-ready multi-agent coding assistant prototype that maps three research ideas into a practical software-engineering loop:
 
