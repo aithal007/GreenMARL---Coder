@@ -15,6 +15,7 @@ import os
 import sys
 import threading
 import time
+import traceback
 from pathlib import Path
 
 import gradio as gr
@@ -114,48 +115,62 @@ def run_mode(mode: str, model_name: str, episodes: int, task_id: str):
     all_metrics = []
     log_lines = [f"▶ [{mode.upper()}] model={model_name} device={DEVICE}\n"]
 
-    for ep in range(episodes):
-        if ep > 0:
-            gym.advance()
+    try:
+        for ep in range(episodes):
+            if ep > 0:
+                gym.advance()
 
-        yield (
-            "\n".join(log_lines) + f"\n⏳ Episode {ep + 1}/{episodes} running…",
-            _fmt_table(all_metrics),
-            chat_log_path.read_text(encoding="utf-8") if chat_log_path.exists() else "",
-        )
+            yield (
+                "\n".join(log_lines) + f"\n⏳ Episode {ep + 1}/{episodes} running…",
+                _fmt_table(all_metrics),
+                chat_log_path.read_text(encoding="utf-8") if chat_log_path.exists() else "",
+            )
 
-        m = coordinator.run_episode(
-            task_id=task_id if task_id != "auto" else None
-        )
-        all_metrics.append(m)
+            try:
+                m = coordinator.run_episode(
+                    task_id=task_id if task_id != "auto" else None
+                )
+            except Exception as exc:
+                logger.exception("Episode %s failed in mode=%s", ep + 1, mode)
+                log_lines.append(f"\n❌ Episode {ep + 1} failed: {exc}")
+                log_lines.append(traceback.format_exc())
+                yield (
+                    "\n".join(log_lines),
+                    _fmt_table(all_metrics),
+                    chat_log_path.read_text(encoding="utf-8") if chat_log_path.exists() else "",
+                )
+                return
 
-        eff = m.sleep_count / max(m.inference_count + m.sleep_count, 1)
-        log_lines.append(
-            f"Ep {m.episode + 1:02d} | {m.task_id} | reward={m.total_reward:.3f} "
-            f"| pass={m.pass_rate:.0%} | hidden={m.hidden_pass_rate:.0%} "
-            f"| infer={m.inference_count} | sleep={m.sleep_count} "
-            f"| ETD={eff:.0%} | G={m.planner_generator} | {m.time_s:.1f}s"
-        )
+            all_metrics.append(m)
 
+            eff = m.sleep_count / max(m.inference_count + m.sleep_count, 1)
+            log_lines.append(
+                f"Ep {m.episode + 1:02d} | {m.task_id} | reward={m.total_reward:.3f} "
+                f"| pass={m.pass_rate:.0%} | hidden={m.hidden_pass_rate:.0%} "
+                f"| infer={m.inference_count} | sleep={m.sleep_count} "
+                f"| ETD={eff:.0%} | G={m.planner_generator} | {m.time_s:.1f}s"
+            )
+
+            yield (
+                "\n".join(log_lines),
+                _fmt_table(all_metrics),
+                chat_log_path.read_text(encoding="utf-8") if chat_log_path.exists() else "",
+            )
+
+        metrics_path = LOGS_DIR / f"metrics_{mode}.json"
+        with open(metrics_path, "w") as f:
+            json.dump(
+                [m.__dict__ for m in all_metrics],
+                f, indent=2, default=str,
+            )
+        log_lines.append(f"\n✅ Done — metrics saved to {metrics_path}")
         yield (
             "\n".join(log_lines),
             _fmt_table(all_metrics),
             chat_log_path.read_text(encoding="utf-8") if chat_log_path.exists() else "",
         )
-
-    coordinator.close()
-    metrics_path = LOGS_DIR / f"metrics_{mode}.json"
-    with open(metrics_path, "w") as f:
-        json.dump(
-            [m.__dict__ for m in all_metrics],
-            f, indent=2, default=str,
-        )
-    log_lines.append(f"\n✅ Done — metrics saved to {metrics_path}")
-    yield (
-        "\n".join(log_lines),
-        _fmt_table(all_metrics),
-        chat_log_path.read_text(encoding="utf-8") if chat_log_path.exists() else "",
-    )
+    finally:
+        coordinator.close()
 
 
 # ── Compare runner ─────────────────────────────────────────────────────────
@@ -179,16 +194,23 @@ def run_compare(model_name: str, episodes: int):
             mode=mode, steps_per_episode=1, chat_log_path=chat_log_path,
         )
         mode_metrics = []
-        for ep in range(episodes):
-            if ep > 0:
-                gym.advance()
-            m = coordinator.run_episode()
-            mode_metrics.append(m)
-            log_parts.append(
-                f"  Ep{ep + 1}: {m.task_id} reward={m.total_reward:.3f} "
-                f"pass={m.pass_rate:.0%} infer={m.inference_count} sleep={m.sleep_count}"
-            )
-        coordinator.close()
+        try:
+            for ep in range(episodes):
+                if ep > 0:
+                    gym.advance()
+                m = coordinator.run_episode()
+                mode_metrics.append(m)
+                log_parts.append(
+                    f"  Ep{ep + 1}: {m.task_id} reward={m.total_reward:.3f} "
+                    f"pass={m.pass_rate:.0%} infer={m.inference_count} sleep={m.sleep_count}"
+                )
+        except Exception as exc:
+            logger.exception("Compare mode failed for %s", mode)
+            log_parts.append(f"\n❌ Compare failed in {mode}: {exc}")
+            log_parts.append(traceback.format_exc())
+            return "\n".join(log_parts), "Comparison aborted due to runtime error."
+        finally:
+            coordinator.close()
         results[mode] = mode_metrics
 
     table = _compare_table(results)
@@ -433,4 +455,4 @@ with gr.Blocks(title="GreenMARL-Coder", theme=gr.themes.Soft()) as demo:
 
 
 if __name__ == "__main__":
-    demo.launch()
+    demo.queue(default_concurrency_limit=1).launch()
