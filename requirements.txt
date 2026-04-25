@@ -1,21 +1,9 @@
 # GreenMARL-Coder dependencies
-# Install with: pip install -r requirements.txt
-#
-# GPU users: replace torch with the appropriate CUDA build:
-#   pip install torch --index-url https://download.pytorch.org/whl/cu121
-
-# Core ML
 torch>=2.2.0
 transformers>=4.40.0
 accelerate>=0.28.0
-sentencepiece>=0.2.0      # required by many HF tokenizers
-protobuf>=3.20.0          # required by sentencepiece
-
-# Scientific
+sentencepiece>=0.2.0
+protobuf>=3.20.0
+huggingface_hub>=0.22.0
+gradio>=4.36.0
 numpy>=1.26.0
-
-# Testing
-pytest>=8.0.0
-
-# Optional: vLLM for faster inference on GPU (comment out if CPU-only)
-# vllm>=0.4.0

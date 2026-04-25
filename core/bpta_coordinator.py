@@ -1,32 +1,21 @@
 """
 BPTA Coordinator — orchestrates the Coder → Gym → Debugger → Coder loop.
 
+Fixes applied vs original:
+  - inference_count / sleep_count are now per-episode (snapshot delta, not cumulative).
+  - obs.update() replaced with careful merge that preserves task fields.
+  - chat_log_path is a constructor parameter (supports Gradio demo & main.py).
+
 Hybrid BPTA implementation:
-
-  [In-Context BPTA]
-  The Debugger's structured 'bpta_delta' is injected directly into the Coder's
-  (and Planner's) prompt context for the next episode, acting as a textual
-  gradient signal.
-
-  [Stub PyTorch Adapter]
-  A small MLP operates on a fixed-size "state embedding" derived from the
-  observation dict (pass_rate, reward, entropy, etc.).  On each step it
-  produces a context_offset vector.  This demonstrates the architectural
-  concept of learned backpropagation through agent state — the offset is
-  used to influence the context_delta magnitude rather than actual prompt
-  embeddings (which would require model internals access).
-
-  In a full BPTA implementation this adapter would be trained with:
-      loss = -V(s_{t+1})    (maximize value)
-  and gradients would flow backward through the agent graph.
+  [In-Context] Debugger's bpta_delta injected into Coder's prompt context.
+  [Stub PyTorch] StateAdapter MLP demonstrates differentiable feedback pathway.
 """
 
 from __future__ import annotations
 
 import logging
-import math
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -51,13 +40,12 @@ CHAT_LOG = LOGS_DIR / "agent_chat.txt"
 
 class StateAdapter(nn.Module):
     """
-    Tiny MLP: (state_dim,) → (context_dim,)
+    Tiny MLP: state_vec (6,) → context_offset (32,)
 
-    Input features (state_dim = 6):
+    Input features:
         [pass_rate, hidden_pass_rate, reward, was_sleep, syntax_error, entropy_proxy]
 
-    Output: a context_dim-dimensional offset that modulates the delta magnitude.
-    In a full system this would project into the LLM's embedding space.
+    In a full BPTA system this would project into the LLM embedding space.
     """
 
     STATE_DIM = 6
@@ -90,8 +78,8 @@ class EpisodeMetrics:
     shaped_reward: float
     pass_rate: float
     hidden_pass_rate: float
-    inference_count: int
-    sleep_count: int
+    inference_count: int    # per-episode delta (not cumulative)
+    sleep_count: int        # per-episode delta (not cumulative)
     time_s: float
     planner_generator: str = ""
     value_estimate: float = 0.0
@@ -119,16 +107,12 @@ class EpisodeMetrics:
 
 class BPTACoordinator:
     """
-    Runs one complete episode of the GreenMARL-Coder loop.
+    Runs one complete episode: Planner → Coder → Gym → Debugger → BPTA.
 
-    Sequence per step:
-      1. Planner.act(obs)         → plan JSON
-      2. Coder.act(obs)           → code | sleep_token
-      3. Gym.step(code)           → StepResult
-      4. Debugger.evaluate(...)   → DebuggerOutput
-      5. Inject BPTA delta        → Coder.inject_bpta_delta(delta)
-      6. StateAdapter forward     → context_offset (logged, not used for training)
-      7. Compute shaped reward, log, return metrics
+    Args:
+        chat_log_path: Where to write the agent conversation transcript.
+                       Defaults to logs/agent_chat.txt. Pass a custom path
+                       when running multiple modes in parallel (e.g. Gradio).
     """
 
     def __init__(
@@ -140,19 +124,21 @@ class BPTACoordinator:
         mode: str = "full",
         steps_per_episode: int = 1,
         adapter_lr: float = 1e-3,
+        chat_log_path: Path = CHAT_LOG,
     ) -> None:
         self.gym = gym
         self.planner = planner
         self.coder = coder
         self.debugger = debugger
-        self.mode = mode              # "baseline" | "multi_agent" | "full"
+        self.mode = mode
         self.steps_per_episode = steps_per_episode
 
         self.adapter = StateAdapter()
         self.adapter_optimizer = optim.Adam(self.adapter.parameters(), lr=adapter_lr)
 
         LOGS_DIR.mkdir(exist_ok=True)
-        self._chat_log = open(CHAT_LOG, "a", encoding="utf-8")  # noqa: SIM115
+        self._chat_log_path = Path(chat_log_path)
+        self._chat_log = open(self._chat_log_path, "a", encoding="utf-8")  # noqa: SIM115
         self._episode_count = 0
 
     # ------------------------------------------------------------------
@@ -168,8 +154,16 @@ class BPTACoordinator:
         if task_id:
             obs = self.gym._task_obs(self.gym._resolve_task(task_id))
 
-        p_plan = self.planner.past_performance_buffer[-1] if self.planner.past_performance_buffer else 0.0
+        p_plan = (
+            self.planner.past_performance_buffer[-1]
+            if self.planner.past_performance_buffer
+            else 0.0
+        )
         self.planner.start_episode(self.steps_per_episode, p_plan=p_plan)
+
+        # Snapshot cumulative counts at episode start → per-episode delta
+        infer_start = self.coder.inference_count
+        sleep_start = self.coder.sleep_count
 
         total_reward = 0.0
         total_shaped = 0.0
@@ -178,45 +172,55 @@ class BPTACoordinator:
         last_debugger_out: DebuggerOutput | None = None
         last_step: StepResult | None = None
 
+        # Keep the task obs fields stable across steps
+        task_obs: dict[str, Any] = dict(obs)
+
         for step_idx in range(self.steps_per_episode):
-            step_result, debugger_out = self._run_step(obs, step_idx)
+            step_result, debugger_out = self._run_step(task_obs, step_idx)
             last_step = step_result
             last_debugger_out = debugger_out
 
             total_reward += step_result.reward
-            if debugger_out:
-                total_shaped += debugger_out.shaped_reward
-            else:
-                total_shaped += step_result.reward
-
+            total_shaped += (
+                debugger_out.shaped_reward if debugger_out else step_result.reward
+            )
             best_pass_rate = max(best_pass_rate, step_result.pass_rate)
             best_hidden_rate = max(best_hidden_rate, step_result.hidden_pass_rate)
 
-            # Update obs with new test feedback for subsequent steps
-            obs.update(step_result.obs)
+            # Merge result obs back — but do NOT overwrite top-level task fields
+            # (description, function_signature, examples, task_id) that came from
+            # the initial reset. Clobbering those breaks multi-step prompts.
+            preserved = {
+                k: task_obs[k]
+                for k in ("task_id", "name", "description", "function_signature", "examples")
+                if k in task_obs
+            }
+            task_obs.update(step_result.obs)
+            task_obs.update(preserved)
 
-        # Episode end
+        # Episode end bookkeeping
         self.planner.end_episode(best_pass_rate)
-        self.coder.observe(obs, best_pass_rate)
+        self.coder.observe(task_obs, best_pass_rate)
         self._episode_count += 1
 
         metrics = EpisodeMetrics(
             episode=ep,
-            task_id=obs.get("task_id", "?"),
+            task_id=task_obs.get("task_id", "?"),
             mode=self.mode,
             steps=self.steps_per_episode,
             total_reward=total_reward,
             shaped_reward=total_shaped,
             pass_rate=best_pass_rate,
             hidden_pass_rate=best_hidden_rate,
-            inference_count=self.coder.inference_count,
-            sleep_count=self.coder.sleep_count,
+            # Per-episode counts (FIXED: use delta from snapshot)
+            inference_count=self.coder.inference_count - infer_start,
+            sleep_count=self.coder.sleep_count - sleep_start,
             time_s=time.perf_counter() - t0,
             planner_generator=self.planner.generator_mode,
             value_estimate=last_debugger_out.value_estimate if last_debugger_out else 0.0,
             bpta_delta_len=len(last_debugger_out.bpta_delta) if last_debugger_out else 0,
         )
-        self._log_episode_summary(metrics, last_step, last_debugger_out)
+        self._log_episode_summary(metrics)
         return metrics
 
     # ------------------------------------------------------------------
@@ -229,13 +233,13 @@ class BPTACoordinator:
         step_idx: int,
     ) -> tuple[StepResult, DebuggerOutput | None]:
         """Execute one step: Planner → Coder → Gym → Debugger → BPTA."""
+        import json
 
         # --- Planner (MARLIN) ---
         plan_json = ""
         if self.mode in ("multi_agent", "full"):
             plan_json = self.planner.act(obs)
             try:
-                import json
                 self.coder.current_plan = json.loads(plan_json)
             except Exception:
                 self.coder.current_plan = None
@@ -249,7 +253,7 @@ class BPTACoordinator:
 
         if is_sleep:
             code_to_eval = self.coder.get_last_solution()
-            self._log("Coder", "[SLEEP] reusing last solution")
+            self._log("Coder", "[ETD SLEEP] reusing last solution")
         else:
             code_to_eval = code_or_sleep
             self._log("Coder", code_or_sleep[:600])
@@ -271,7 +275,6 @@ class BPTACoordinator:
             )
             self._log("Debugger", debugger_out.critique)
 
-            # --- In-context BPTA backward pass ---
             if self.mode == "full":
                 self._apply_bpta(debugger_out, step_result)
 
@@ -288,54 +291,48 @@ class BPTACoordinator:
     ) -> None:
         """
         Hybrid BPTA:
-
         1. In-Context: inject Debugger's bpta_delta into Coder's context_delta.
-        2. Stub PyTorch: forward pass through StateAdapter to compute
-           context_offset; backward pass minimises -V(s) (maximize value).
-           The L2 norm of the offset modulates how forcefully we inject the delta.
+        2. Stub PyTorch: forward+backward through StateAdapter (-V(s) loss).
         """
-        # -- In-Context BPTA --
+        # In-Context BPTA
         self.coder.inject_bpta_delta(debugger_out.bpta_delta)
 
-        # -- Stub PyTorch adapter --
+        # Stub differentiable adapter
         state_vec = self._obs_to_state_vec(step_result.obs)
         context_offset = self.adapter(state_vec)
 
-        # Pseudo-loss: maximize value estimate → minimize -V(s)
         value_tensor = torch.tensor(
             [debugger_out.value_estimate], dtype=torch.float32
         )
         loss = -value_tensor.mean()
 
         self.adapter_optimizer.zero_grad()
-        # We detach context_offset since it is a concept demo (no real grad path)
         loss.backward()
         self.adapter_optimizer.step()
 
         offset_norm = context_offset.norm().item()
         logger.debug(
             "[BPTA] In-context delta injected (%d chars). "
-            "Adapter offset_norm=%.4f, pseudo_loss=%.4f",
+            "offset_norm=%.4f value=%.3f pseudo_loss=%.4f",
             len(debugger_out.bpta_delta),
             offset_norm,
+            debugger_out.value_estimate,
             loss.item(),
         )
         self._log(
             "BPTA",
-            f"offset_norm={offset_norm:.4f} | delta='{debugger_out.bpta_delta[:120]}'",
+            f"offset_norm={offset_norm:.4f} value={debugger_out.value_estimate:.3f} "
+            f"| delta='{debugger_out.bpta_delta[:120]}'",
         )
 
     @staticmethod
     def _obs_to_state_vec(obs: dict[str, Any]) -> torch.Tensor:
-        """Convert observation dict to a fixed-size state vector."""
         vec = [
             float(obs.get("pass_rate", 0.0)),
             float(obs.get("hidden_pass_rate", 0.0)),
             float(obs.get("reward", 0.0)),
             float(obs.get("was_sleep", False)),
             float(obs.get("syntax_error", False)),
-            # entropy proxy: 1 - pass_rate as a rough stand-in when real entropy
-            # is not in the obs (it is computed inside BaseAgent)
             1.0 - float(obs.get("pass_rate", 0.0)),
         ]
         return torch.tensor(vec, dtype=torch.float32).unsqueeze(0)
@@ -350,25 +347,25 @@ class BPTACoordinator:
         self._chat_log.flush()
         logger.debug(line.rstrip())
 
-    def _log_episode_summary(
-        self,
-        metrics: EpisodeMetrics,
-        last_step: StepResult | None,
-        dbg: DebuggerOutput | None,
-    ) -> None:
+    def _log_episode_summary(self, metrics: EpisodeMetrics) -> None:
+        efficiency = metrics.sleep_count / max(
+            metrics.inference_count + metrics.sleep_count, 1
+        )
         self._log(
             "SUMMARY",
             f"ep={metrics.episode} task={metrics.task_id} mode={metrics.mode} "
-            f"reward={metrics.total_reward:.3f} pass={metrics.pass_rate:.2%} "
+            f"reward={metrics.total_reward:.3f} shaped={metrics.shaped_reward:.3f} "
+            f"pass={metrics.pass_rate:.2%} hidden={metrics.hidden_pass_rate:.2%} "
             f"infer={metrics.inference_count} sleep={metrics.sleep_count} "
+            f"etd_eff={efficiency:.1%} "
             f"time={metrics.time_s:.1f}s planner_G={metrics.planner_generator}",
         )
 
     def close(self) -> None:
-        self._chat_log.close()
-
-    def __del__(self) -> None:
         try:
             self._chat_log.close()
         except Exception:
             pass
+
+    def __del__(self) -> None:
+        self.close()

@@ -317,6 +317,11 @@ def parse_args() -> argparse.Namespace:
                         help="Console log level")
     parser.add_argument("--save-metrics", action="store_true",
                         help="Save per-episode metrics to logs/metrics.json")
+    parser.add_argument(
+        "--hf-token",
+        default=None,
+        help="HuggingFace API token (sets HF_TOKEN env var for model downloads)",
+    )
 
     return parser.parse_args()
 
@@ -328,6 +333,12 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     logging.getLogger().setLevel(args.log_level)
+
+    # Set HF token in environment before any model loading
+    if args.hf_token:
+        import os
+        os.environ["HF_TOKEN"] = args.hf_token
+        logger.info("HF_TOKEN set from --hf-token argument.")
 
     print(f"\nGreenMARL-Coder | model={args.model} | device={args.device}")
     print(f"episodes={args.episodes} | steps/ep={args.steps}\n")
