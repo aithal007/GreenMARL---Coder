@@ -10,6 +10,47 @@ The project is designed for fast iteration in a 72-hour setting: it uses local H
 
 ---
 
+## Judge / hackathon deliverables (OpenEnv + training + story)
+
+| Deliverable | Where |
+|-------------|--------|
+| **Runnable Space (demo)** | [Hugging Face Space — Aithal04/metaai](https://huggingface.co/spaces/Aithal04/metaai) (Gradio `app.py`) |
+| **OpenEnv manifest** | `openenv.yaml` — client class `greenmarl_openenv.coding_trl_env.CodingGymToolEnv` |
+| **Tool env (Gym + TRL)** | `greenmarl_openenv/coding_trl_env.py` — tool `submit_python_solution` (not reserved names) |
+| **TRL + GRPO training** | `training/grpo_coding_gym.py`; extras in `requirements-train.txt` |
+| **Colab smoke** | `training/Colab_GRPO_CodingGym.ipynb` (GPU runtime) |
+| **Metrics plots** | After `main.py --save-metrics`, run `python training/plot_run_metrics.py` → `assets/figures/reward_and_pass_by_episode.png` (commit PNGs for reviewers) |
+| **Checklist writeup** | [docs/SUBMISSION_JUDGING.md](docs/SUBMISSION_JUDGING.md) |
+| **External story** | [docs/PITCH_SLIDES.md](docs/PITCH_SLIDES.md) (short slide-deck style writeup) |
+
+**Training on GPU:** set `USE_TORCH=1` and `USE_TF=0` before importing `transformers` / `trl` (see the top of `training/grpo_coding_gym.py`). On CPU-only, prefer `--smoke` or a tiny model.
+
+**ETD and compare mode:** `ETD=0%` on a handful of *different* tasks is expected when the coder never sees stable, low-entropy conditions with a reusable solution. The comparison table in `--compare` can look worse for “full” than a single good `--full` run because of LLM randomness and cold-start order — use more episodes, fixed tasks, or deterministic decoding for demos.
+
+**Research context:** MARLIN-style planner switching, entropy-based ETD, and in-context BPTA feedback are implemented in the agent loop. Full BPPO (Equation 6) and twin-critic epistemic gating from the ETD-MAPPO papers are natural extensions, not the present training loss.
+
+### Run everything on HF GPU (no local training)
+
+Use Hugging Face Jobs to run evaluation + plotting + GRPO remotely:
+
+```bash
+hf jobs run --flavor t4-medium --timeout 4h --detach \
+  --secrets HF_TOKEN \
+  python:3.10 bash -lc "
+    git clone https://github.com/aithal007/GreenMARL---Coder.git && \
+    cd GreenMARL---Coder && \
+    bash training/hf_gpu_pipeline.sh
+  "
+```
+
+The pipeline uploads reviewer artifacts to the Space repo under `artifacts/`:
+- `artifacts/metrics_full.json`
+- `artifacts/reward_and_pass_by_episode.png`
+- `artifacts/hf_gpu_run_summary.txt`
+- `artifacts/grpo_config_used.json`
+
+---
+
 ## Why this project
 
 Full multi-agent PPO training can be too slow and fragile for short hackathons. GreenMARL-Coder keeps the **agent architecture and learning signals** while replacing expensive end-to-end RL training with:
@@ -60,22 +101,17 @@ This gives a working prototype you can demo, benchmark, and extend later.
 
 ```text
 meta-ai/
-├─ agents/
-│  ├─ base_agent.py
-│  ├─ planner.py
-│  ├─ coder.py
-│  └─ debugger.py
-├─ core/
-│  └─ bpta_coordinator.py
-├─ env/
-│  ├─ coding_gym.py
-│  └─ tasks.json
+├─ agents/          (planner, coder, debugger, MARLIN/ETD/BPTA hooks)
+├─ core/            bpta_coordinator.py
+├─ env/             coding_gym.py, tasks.json
+├─ greenmarl_openenv/   OpenEnv client + TRL tool wrapper (CodingGymToolEnv)
+├─ training/        grpo_coding_gym.py, Colab_GRPO_CodingGym.ipynb, plot_run_metrics.py
 ├─ tests/
-│  ├─ test_gym.py
-│  └─ test_etd_gating.py
-├─ logs/
+├─ openenv.yaml
+├─ app.py           Gradio Space entrypoint
 ├─ main.py
-└─ requirements.txt
+├─ requirements.txt
+└─ requirements-train.txt
 ```
 
 ---

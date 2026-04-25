@@ -1,0 +1,21 @@
+# GreenMARL-Coder — OpenEnv manifest
+# See: https://huggingface.co/docs/hub/spaces-config-reference
+# and OpenEnv: https://meta-pytorch.org/OpenEnv/
+name: greenmarl_coding_gym
+version: 0.1.0
+description: >
+  Sandboxed Python coding tasks with unit-test–based partial rewards, hidden
+  tests, and time penalties. Multi-agent (MARLIN/ETD/BPTA) code runs in the
+  main app; this manifest registers the *environment* (CodingGym) for OpenEnv/TRL.
+spec_version: 1
+client:
+  class_name: CodingGymToolEnv
+  module: greenmarl_openenv.coding_trl_env
+action:
+  class_name: CodingAction
+  module: greenmarl_openenv.models
+observation:
+  class_name: CodingObservation
+  module: greenmarl_openenv.models
+# Local-only / Space demo: no custom Docker for v0.1
+default_image: python:3.10-slim
