@@ -61,6 +61,19 @@ The pipeline uploads reviewer artifacts to the Space repo under `artifacts/`:
 - `artifacts/hf_gpu_run_summary.txt`
 - `artifacts/grpo_config_used.json`
 
+### Latest HF GPU run (evidence on Hub)
+
+Open these directly (no clone required):
+
+- [Reward / pass plot (PNG)](https://huggingface.co/spaces/Aithal04/metaai/resolve/main/artifacts/reward_and_pass_by_episode.png)
+- [Episode metrics (JSON)](https://huggingface.co/spaces/Aithal04/metaai/resolve/main/artifacts/metrics_full.json)
+- [Run summary (TXT)](https://huggingface.co/spaces/Aithal04/metaai/resolve/main/artifacts/hf_gpu_run_summary.txt)
+- [GRPO config used (JSON)](https://huggingface.co/spaces/Aithal04/metaai/resolve/main/artifacts/grpo_config_used.json)
+
+From the last successful job: **20-episode full eval** averaged about **0.69 reward**, **50% visible pass**, **50% hidden pass** (see `hf_gpu_run_summary.txt`). **GRPO** completed **40 steps** with reported **`train_loss` ≈ 0.0027**; logs show many steps hitting `max_completion_length=1024` with `tools/call_frequency` often **0**, then occasional tool calls and non-zero rewards — that is normal for a short demo run and is still valid “pipeline ran on real env” evidence.
+
+![Reward and pass rate by episode (HF Job output)](https://huggingface.co/spaces/Aithal04/metaai/resolve/main/artifacts/reward_and_pass_by_episode.png)
+
 ---
 
 ## Why this project

@@ -53,5 +53,6 @@ Use `training/Colab_GRPO_CodingGym.ipynb` (GPU runtime): install `requirements.t
 ## HF GPU-only execution
 
 - Script: `training/hf_gpu_pipeline.sh`
-- Launch (example): `hf jobs run --flavor t4-medium --timeout 4h --detach --secrets HF_TOKEN python:3.10 bash -lc "<clone repo && bash training/hf_gpu_pipeline.sh>"`
+- Launch (example): `hf jobs run --namespace YOUR_USER --flavor a10g-small --timeout 4h --detach --secrets HF_TOKEN python:3.10 bash -lc "<clone repo && git checkout <commit> && bash training/hf_gpu_pipeline.sh>"`
 - Artifacts are uploaded to the Space repo under `artifacts/`.
+- After a successful run, link the `artifacts/*` files from the README (see “Latest HF GPU run” section).
