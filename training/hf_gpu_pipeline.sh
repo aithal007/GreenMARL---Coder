@@ -26,6 +26,7 @@ GRPO_STEPS="${GRPO_STEPS:-80}"
 
 export USE_TORCH=1
 export USE_TF=0
+export TRL_EXPERIMENTAL_SILENCE=1
 export PYTHONUNBUFFERED=1
 
 python -m pip install --upgrade pip
@@ -33,7 +34,6 @@ python -m pip install --upgrade pip
 # resolver backtracking from app-specific pins.
 python -m pip install \
   "torch>=2.2.0" \
-  "transformers>=4.56.2,<5.0.0" \
   "accelerate>=1.4.0" \
   "sentencepiece>=0.2.0" \
   "protobuf>=3.20.0" \
@@ -43,6 +43,9 @@ python -m pip install \
   "peft>=0.19.0" \
   "matplotlib>=3.8.0" \
   "openenv-core[core]>=0.2.3"
+
+# GRPOTrainer `environment_factory` requires transformers main branch.
+python -m pip install --upgrade "git+https://github.com/huggingface/transformers.git@main"
 
 mkdir -p logs assets/figures
 
@@ -79,6 +82,8 @@ echo "==> Uploading artifacts to HF Space (${HF_SPACE_REPO})"
 hf upload "${HF_SPACE_REPO}" logs/metrics_full.json artifacts/metrics_full.json --repo-type space
 hf upload "${HF_SPACE_REPO}" assets/figures/reward_and_pass_by_episode.png artifacts/reward_and_pass_by_episode.png --repo-type space
 hf upload "${HF_SPACE_REPO}" logs/hf_gpu_run_summary.txt artifacts/hf_gpu_run_summary.txt --repo-type space
-hf upload "${HF_SPACE_REPO}" logs/grpo_coding/grpo_config_used.json artifacts/grpo_config_used.json --repo-type space
+if [[ -f "logs/grpo_coding/grpo_config_used.json" ]]; then
+  hf upload "${HF_SPACE_REPO}" logs/grpo_coding/grpo_config_used.json artifacts/grpo_config_used.json --repo-type space
+fi
 
 echo "HF GPU pipeline finished successfully."
