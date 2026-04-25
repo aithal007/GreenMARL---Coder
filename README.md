@@ -1,0 +1,258 @@
+﻿# GreenMARL-Coder
+
+GreenMARL-Coder is a hackathon-ready multi-agent coding assistant prototype that maps three research ideas into a practical software-engineering loop:
+
+- **MARLIN**: LLM-guided planner with adaptive generator switching (`G_ADS` / `G_IAN`)
+- **ETD-MAPPO**: uncertainty-gated coder that can skip decoding via a `sleep_token`
+- **BPTA**: bidirectional feedback where debugger critique is propagated back to planner/coder
+
+The project is designed for fast iteration in a 72-hour setting: it uses local Hugging Face LLMs as policy backbones, while still preserving the algorithmic structure needed for judging.
+
+---
+
+## Why this project
+
+Full multi-agent PPO training can be too slow and fragile for short hackathons. GreenMARL-Coder keeps the **agent architecture and learning signals** while replacing expensive end-to-end RL training with:
+
+1. **LLM policy inference with logprobs** for uncertainty estimation
+2. **In-context BPTA** for practical feedback propagation
+3. **Stub PyTorch state adapter** to demonstrate a differentiable pathway concept
+
+This gives a working prototype you can demo, benchmark, and extend later.
+
+---
+
+## System architecture
+
+### Agents
+
+- `PlannerAgent` (`agents/planner.py`)
+  - Implements MARLIN-style generator selection logic
+  - Produces structured plan JSON for each task
+  - Maintains past performance buffer and mode switching
+
+- `CoderAgent` (`agents/coder.py`)
+  - Generates Python solutions guided by planner output
+  - Uses ETD gating: if entropy is low and rewards are stable, returns `sleep_token`
+  - Reuses prior solution to reduce inference calls
+
+- `DebuggerAgent` (`agents/debugger.py`)
+  - Critiques code using sandbox test feedback
+  - Produces value estimate, reward shaping delta, and structured BPTA feedback
+
+### Environment
+
+- `CodingGym` (`env/coding_gym.py`)
+  - Executes generated code in isolated subprocess
+  - Runs visible + hidden tests from `env/tasks.json`
+  - Returns reward, pass rates, timing, and diagnostics
+
+### Coordinator
+
+- `BPTACoordinator` (`core/bpta_coordinator.py`)
+  - Orchestrates Planner -> Coder -> Gym -> Debugger
+  - Injects debugger feedback into future prompts (in-context BPTA)
+  - Includes a small PyTorch `StateAdapter` to model latent feedback flow
+
+---
+
+## Repository layout
+
+```text
+meta-ai/
+├─ agents/
+│  ├─ base_agent.py
+│  ├─ planner.py
+│  ├─ coder.py
+│  └─ debugger.py
+├─ core/
+│  └─ bpta_coordinator.py
+├─ env/
+│  ├─ coding_gym.py
+│  └─ tasks.json
+├─ tests/
+│  ├─ test_gym.py
+│  └─ test_etd_gating.py
+├─ logs/
+├─ main.py
+└─ requirements.txt
+```
+
+---
+
+## Installation
+
+### 1) Clone
+
+```bash
+git clone https://github.com/aithal007/GreenMARL---Coder.git
+cd GreenMARL---Coder
+```
+
+### 2) Create environment
+
+```bash
+python -m venv .venv
+.venv\Scripts\activate
+```
+
+### 3) Install dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+> If you want GPU acceleration, install the matching CUDA build of PyTorch first.
+
+---
+
+## Quick start
+
+### Baseline (single agent)
+
+```bash
+python main.py --baseline --episodes 5
+```
+
+### Multi-agent ablation (no ETD/BPTA)
+
+```bash
+python main.py --multi-agent --episodes 5
+```
+
+### Full GreenMARL-Coder
+
+```bash
+python main.py --full --episodes 5 --steps 1
+```
+
+### Compare all modes
+
+```bash
+python main.py --compare --episodes 5 --save-metrics
+```
+
+---
+
+## CLI options
+
+```bash
+python main.py --help
+```
+
+Key arguments:
+
+- `--baseline` | `--multi-agent` | `--full` | `--compare`
+- `--model` (default: `Qwen/Qwen2.5-Coder-1.5B-Instruct`)
+- `--device` (`cpu`, `cuda`, or `mps`)
+- `--episodes` (default: `5`)
+- `--steps` (default: `1`)
+- `--save-metrics` (writes metrics JSON under `logs/`)
+
+---
+
+## Metrics and logs
+
+### Metrics captured
+
+- Episode reward and shaped reward
+- Visible pass rate and hidden pass rate
+- Inference count and ETD sleep count
+- Time-to-solution
+- Planner generator mode
+
+### Log files
+
+- `logs/run.log` - runtime logs
+- `logs/agent_chat.txt` - agent-by-agent interaction trace
+- `logs/metrics_*.json` - saved metrics snapshots
+
+---
+
+## ETD gating details
+
+The coder probes the next-token distribution for the first `K` generation steps and computes Shannon entropy:
+
+\[
+H = -\sum_i p_i \log_2 p_i
+\]
+
+If:
+
+- `entropy < ENTROPY_THRESHOLD`
+- reward history is stable (low variance, positive mean)
+- previous solution exists
+
+then the coder emits `sleep_token` and reuses earlier code.
+
+This reduces unnecessary inference while preserving performance on repeated/stable tasks.
+
+---
+
+## BPTA implementation strategy
+
+GreenMARL-Coder uses a hybrid approach:
+
+1. **In-context backprop**
+   - Debugger emits structured `bpta_delta`
+   - Coordinator injects this into coder/planner context for subsequent steps
+
+2. **Stub differentiable adapter**
+   - `StateAdapter` MLP consumes compact state vector
+   - Demonstrates latent feedback pathway (conceptual stand-in for full differentiable pipeline)
+
+This preserves demo simplicity while staying faithful to BPTA’s intent.
+
+---
+
+## Test suite
+
+Run all tests:
+
+```bash
+python -m pytest tests/ -v
+```
+
+Current test coverage includes:
+
+- Coding gym task loading, sandbox execution, syntax errors, reward clamping
+- ETD gating behavior (sleep vs act) under entropy/reward conditions
+- BPTA prompt delta injection behavior
+
+---
+
+## Expected demo flow (hackathon)
+
+1. Start with `--baseline` to establish compute and pass-rate floor
+2. Run `--multi-agent` to show planner/debugger coordination benefit
+3. Run `--full` and verify:
+   - lower inference count (ETD savings)
+   - improved or stable pass rate (BPTA feedback)
+4. Show `logs/agent_chat.txt` as qualitative evidence of agent negotiation
+
+---
+
+## Known limitations
+
+- Uses language-model prompting rather than full PPO optimization
+- Sandbox is subprocess-based, not hardened container isolation
+- BPTA differentiable path is currently conceptual (stub adapter)
+- Performance depends on model choice and local hardware
+
+---
+
+## Roadmap
+
+- Replace stub adapter with trainable prompt/embedding optimizer
+- Add secure containerized execution for coding gym
+- Extend task set with multi-file and debugging-heavy challenges
+- Add experiment tracking dashboards for richer benchmark reporting
+
+---
+
+## Acknowledgments
+
+This repository was built for a multi-agent coding assistant hackathon theme and explores practical translations of MARLIN, ETD-MAPPO, and BPTA ideas into software engineering workflows.
+
+If you are viewing the target remote repository, use this URL:
+- [aithal007/GreenMARL---Coder](https://github.com/aithal007/GreenMARL---Coder.git)

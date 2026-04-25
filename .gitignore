@@ -1,0 +1,16 @@
+﻿__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.venv/
+venv/
+.env
+*.log
+logs/*.log
+logs/metrics*.json
+*.tmp
+*.swp
+.DS_Store
+.idea/
+.vscode/
