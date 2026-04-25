@@ -301,14 +301,24 @@ class BPTACoordinator:
         state_vec = self._obs_to_state_vec(step_result.obs)
         context_offset = self.adapter(state_vec)
 
+        # Build a gradient-connected pseudo-loss so backward() is always valid.
+        value_scalar = float(debugger_out.value_estimate)
         value_tensor = torch.tensor(
-            [debugger_out.value_estimate], dtype=torch.float32
+            value_scalar,
+            dtype=context_offset.dtype,
+            device=context_offset.device,
         )
-        loss = -value_tensor.mean()
+        loss = -(context_offset.mean() * value_tensor)
 
         self.adapter_optimizer.zero_grad()
-        loss.backward()
-        self.adapter_optimizer.step()
+        try:
+            if torch.isfinite(loss):
+                loss.backward()
+                self.adapter_optimizer.step()
+            else:
+                logger.warning("[BPTA] Skipping adapter step due to non-finite loss.")
+        except RuntimeError as exc:
+            logger.warning("[BPTA] Adapter backward step skipped: %s", exc)
 
         offset_norm = context_offset.norm().item()
         logger.debug(
