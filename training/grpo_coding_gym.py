@@ -44,7 +44,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="GRPO on CodingGym (TRL + tool env).")
     parser.add_argument(
         "--model",
-        default="Qwen/Qwen2.5-0.5B-Instruct",
+        default="Qwen/Qwen3-0.6B",
         help="Causal LM with tool / chat template (smaller = faster on T4).",
     )
     parser.add_argument(
@@ -78,6 +78,11 @@ def main() -> int:
         from trl import GRPOConfig, GRPOTrainer
     except ImportError as e:
         print("ERROR: `trl` is required. pip install -r requirements-train.txt", file=sys.stderr)
+        raise SystemExit(1) from e
+    try:
+        from transformers import AutoTokenizer
+    except ImportError as e:
+        print("ERROR: `transformers` is required. pip install -r requirements-train.txt", file=sys.stderr)
         raise SystemExit(1) from e
 
     from greenmarl_openenv.coding_trl_env import CodingGymToolEnv
@@ -119,13 +124,32 @@ def main() -> int:
         fp16=False,
     )
 
-    trainer = GRPOTrainer(
-        model=args.model,
-        train_dataset=dataset,
-        reward_funcs=_reward_from_envs,
-        args=gcfg,
-        environment_factory=CodingGymToolEnv,
-    )
+    tokenizer = AutoTokenizer.from_pretrained(args.model)
+
+    def _build_trainer():
+        return GRPOTrainer(
+            model=args.model,
+            train_dataset=dataset,
+            reward_funcs=_reward_from_envs,
+            args=gcfg,
+            environment_factory=CodingGymToolEnv,
+            processing_class=tokenizer,
+        )
+
+    try:
+        trainer = _build_trainer()
+    except ValueError as e:
+        # Some chat templates are not recognized by TRL's auto schema mapper.
+        # For tool-calling GRPO, inject a known-compatible Qwen3 schema/template.
+        if "Unrecognized chat template" not in str(e):
+            raise
+        try:
+            from trl.chat_template_utils import qwen3_chat_template, qwen3_schema
+        except Exception:  # noqa: BLE001
+            raise
+        tokenizer.chat_template = qwen3_chat_template
+        tokenizer.response_schema = qwen3_schema
+        trainer = _build_trainer()
     trainer.train()
     try:
         cfg_dump = {k: repr(v) for k, v in asdict(gcfg).items()}

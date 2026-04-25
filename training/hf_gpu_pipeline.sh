@@ -20,7 +20,7 @@ cd "$ROOT_DIR"
 
 HF_SPACE_REPO="${HF_SPACE_REPO:-Aithal04/metaai}"
 MODEL="${MODEL:-Qwen/Qwen2.5-Coder-1.5B-Instruct}"
-GRPO_MODEL="${GRPO_MODEL:-Qwen/Qwen2.5-0.5B-Instruct}"
+GRPO_MODEL="${GRPO_MODEL:-Qwen/Qwen3-0.6B}"
 EVAL_EPISODES="${EVAL_EPISODES:-20}"
 GRPO_STEPS="${GRPO_STEPS:-80}"
 
