@@ -29,8 +29,20 @@ export USE_TF=0
 export PYTHONUNBUFFERED=1
 
 python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
-python -m pip install -r requirements-train.txt
+# Install only runtime + training deps needed for CLI eval/GRPO to avoid
+# resolver backtracking from app-specific pins.
+python -m pip install \
+  "torch>=2.2.0" \
+  "transformers>=4.56.2,<5.0.0" \
+  "accelerate>=1.4.0" \
+  "sentencepiece>=0.2.0" \
+  "protobuf>=3.20.0" \
+  "numpy>=1.26.0" \
+  "trl>=1.2.0" \
+  "datasets>=4.8.0" \
+  "peft>=0.19.0" \
+  "matplotlib>=3.8.0" \
+  "openenv-core[core]>=0.2.3"
 
 mkdir -p logs assets/figures
 
