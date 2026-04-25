@@ -42,6 +42,7 @@ python -m pip install \
   "datasets>=4.8.0" \
   "peft>=0.19.0" \
   "matplotlib>=3.8.0" \
+  "jmespath>=1.0.1" \
   "openenv-core[core]>=0.2.3"
 
 # GRPOTrainer `environment_factory` requires transformers main branch.

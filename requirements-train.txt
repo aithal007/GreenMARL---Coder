@@ -8,4 +8,5 @@ trl>=0.20.0
 datasets>=2.19.0
 peft>=0.14.0
 matplotlib>=3.8.0
+jmespath>=1.0.1
 openenv-core[core]>=0.2.1
